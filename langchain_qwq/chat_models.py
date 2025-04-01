@@ -1,6 +1,7 @@
 """Qwen QwQ Thingking chat models."""
 
 from json import JSONDecodeError
+import json_repair as json
 from typing import Any, Dict, Iterator, List, Optional, Type, Union
 
 import openai
@@ -175,9 +176,9 @@ class ChatQwQ(BaseChatOpenAI):
             if isinstance(model_extra, dict) and (
                 reasoning := model_extra.get("reasoning")
             ):
-                rtn.generations[0].message.additional_kwargs["reasoning_content"] = (
-                    reasoning
-                )
+                rtn.generations[0].message.additional_kwargs[
+                    "reasoning_content"
+                ] = reasoning
 
         return rtn
 
@@ -237,9 +238,10 @@ class ChatQwQ(BaseChatOpenAI):
             chunks = list(
                 self._stream(messages, stop=stop, run_manager=run_manager, **kwargs)
             )
-
             content = ""
             reasoning_content = ""
+            tool_calls = []
+            current_tool_calls = {}  # Track tool calls being built
 
             for chunk in chunks:
                 if isinstance(chunk.message.content, str):
@@ -247,6 +249,39 @@ class ChatQwQ(BaseChatOpenAI):
                 reasoning_content += chunk.message.additional_kwargs.get(
                     "reasoning_content", ""
                 )
+
+                if chunk_tool_calls := chunk.message.additional_kwargs.get(
+                    "tool_calls", []
+                ):
+                    for tool_call in chunk_tool_calls:
+                        index = tool_call.get("index", "")
+
+                        # Initialize tool call entry if needed
+                        if index not in current_tool_calls:
+                            current_tool_calls[index] = {
+                                "id": "",
+                                "name": "",
+                                "args": "",
+                                "type": "function",
+                            }
+
+                        # Update tool call ID
+                        if tool_id := tool_call.get("id"):
+                            current_tool_calls[index]["id"] = tool_id
+
+                        # Update function name and arguments
+                        if function := tool_call.get("function"):
+                            if name := function.get("name"):
+                                current_tool_calls[index]["name"] = name
+                            if args := function.get("arguments"):
+                                current_tool_calls[index]["args"] += args
+                                
+                        
+
+            # Convert accumulated tool calls to final format
+            tool_calls = list(current_tool_calls.values())
+            for tool_call in tool_calls:
+                tool_call["args"] = json.loads(tool_call["args"])
 
             last_chunk = chunks[-1]
 
@@ -257,6 +292,7 @@ class ChatQwQ(BaseChatOpenAI):
                         message=AIMessage(
                             content=content,
                             additional_kwargs={"reasoning_content": reasoning_content},
+                            tool_calls=tool_calls,
                         ),
                     )
                 ]
