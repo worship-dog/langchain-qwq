@@ -195,6 +195,7 @@ class ChatQwQ(BaseChatOpenAI):
         )
         if (choices := chunk.get("choices")) and generation_chunk:
             top = choices[0]
+            print("Top: ", top)
             if isinstance(generation_chunk.message, AIMessageChunk):
                 if reasoning_content := top.get("delta", {}).get("reasoning_content"):
                     generation_chunk.message.additional_kwargs["reasoning_content"] = (
@@ -205,6 +206,51 @@ class ChatQwQ(BaseChatOpenAI):
                     generation_chunk.message.additional_kwargs["reasoning_content"] = (
                         reasoning
                     )
+                # Handle tool calls in streaming mode
+                elif tool_calls := top.get("delta", {}).get("tool_calls", []):
+                    for tool_call in tool_calls:
+                        if not tool_call:  # Skip empty deltas
+                            continue
+                        # Initialize or update tool calls
+                        if (
+                            "tool_calls"
+                            not in generation_chunk.message.additional_kwargs
+                        ):
+                            generation_chunk.message.additional_kwargs["tool_calls"] = (
+                                []
+                            )
+
+                        # Handle new tool call
+                        if "index" in tool_call:
+                            generation_chunk.message.additional_kwargs[
+                                "tool_calls"
+                            ].append(
+                                {
+                                    "id": tool_call.get("id", ""),
+                                    "type": "function",
+                                    "name": tool_call.get("function", {}).get(
+                                        "name", ""
+                                    ),
+                                    "args": tool_call.get("function", {}).get(
+                                        "arguments", ""
+                                    ),
+                                }
+                            )
+                        # Handle delta updates to existing tool calls
+                        else:
+                            for (
+                                existing_tool_call
+                            ) in generation_chunk.message.additional_kwargs[
+                                "tool_calls"
+                            ]:
+                                if tool_call.get("function", {}).get("name"):
+                                    existing_tool_call["function_call"]["name"] = (
+                                        tool_call["function"]["name"]
+                                    )
+                                if tool_call.get("function", {}).get("arguments"):
+                                    existing_tool_call["function_call"][
+                                        "arguments"
+                                    ] += tool_call["function"]["arguments"]
 
         return generation_chunk
 
@@ -275,8 +321,6 @@ class ChatQwQ(BaseChatOpenAI):
                                 current_tool_calls[index]["name"] = name
                             if args := function.get("arguments"):
                                 current_tool_calls[index]["args"] += args
-                                
-                        
 
             # Convert accumulated tool calls to final format
             tool_calls = list(current_tool_calls.values())
