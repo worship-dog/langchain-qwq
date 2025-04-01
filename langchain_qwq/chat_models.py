@@ -1,14 +1,18 @@
 """Qwen QwQ Thingking chat models."""
 
 from json import JSONDecodeError
-import json_repair as json
-from typing import Any, Dict, Iterator, List, Optional, Type, Union
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional, Type, Union
 
+import json_repair as json
 import openai
 from langchain_core.callbacks import (
     CallbackManagerForLLMRun,
 )
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import (
+    AIMessage,
+    AIMessageChunk,
+    BaseMessage,
+)
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from langchain_core.utils import from_env, secret_from_env
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -176,9 +180,9 @@ class ChatQwQ(BaseChatOpenAI):
             if isinstance(model_extra, dict) and (
                 reasoning := model_extra.get("reasoning")
             ):
-                rtn.generations[0].message.additional_kwargs[
-                    "reasoning_content"
-                ] = reasoning
+                rtn.generations[0].message.additional_kwargs["reasoning_content"] = (
+                    reasoning
+                )
 
         return rtn
 
@@ -193,38 +197,21 @@ class ChatQwQ(BaseChatOpenAI):
             default_chunk_class,
             base_generation_info,
         )
+
         if (choices := chunk.get("choices")) and generation_chunk:
             top = choices[0]
-            print("Top: ", top)
             if isinstance(generation_chunk.message, AIMessageChunk):
-                if reasoning_content := top.get("delta", {}).get("reasoning_content"):
-                    generation_chunk.message.additional_kwargs["reasoning_content"] = (
-                        reasoning_content
-                    )
-                # Handle use via OpenRouter
-                elif reasoning := top.get("delta", {}).get("reasoning"):
-                    generation_chunk.message.additional_kwargs["reasoning_content"] = (
-                        reasoning
-                    )
-                # Handle tool calls in streaming mode
-                elif tool_calls := top.get("delta", {}).get("tool_calls", []):
-                    for tool_call in tool_calls:
-                        if not tool_call:  # Skip empty deltas
-                            continue
-                        # Initialize or update tool calls
-                        if (
-                            "tool_calls"
-                            not in generation_chunk.message.additional_kwargs
-                        ):
-                            generation_chunk.message.additional_kwargs["tool_calls"] = (
-                                []
-                            )
+                if delta := top.get("delta", {}):
+                    if reasoning_content := delta.get("reasoning_content"):
+                        generation_chunk.message.additional_kwargs[
+                            "reasoning_content"
+                        ] = reasoning_content
 
-                        # Handle new tool call
-                        if "index" in tool_call:
-                            generation_chunk.message.additional_kwargs[
-                                "tool_calls"
-                            ].append(
+                    # Handle tool calls
+                    if tool_calls := delta.get("tool_calls"):
+                        generation_chunk.message.tool_calls = []
+                        for tool_call in tool_calls:
+                            generation_chunk.message.tool_calls.append(
                                 {
                                     "id": tool_call.get("id", ""),
                                     "type": "function",
@@ -236,21 +223,6 @@ class ChatQwQ(BaseChatOpenAI):
                                     ),
                                 }
                             )
-                        # Handle delta updates to existing tool calls
-                        else:
-                            for (
-                                existing_tool_call
-                            ) in generation_chunk.message.additional_kwargs[
-                                "tool_calls"
-                            ]:
-                                if tool_call.get("function", {}).get("name"):
-                                    existing_tool_call["function_call"]["name"] = (
-                                        tool_call["function"]["name"]
-                                    )
-                                if tool_call.get("function", {}).get("arguments"):
-                                    existing_tool_call["function_call"][
-                                        "arguments"
-                                    ] += tool_call["function"]["arguments"]
 
         return generation_chunk
 
@@ -261,17 +233,71 @@ class ChatQwQ(BaseChatOpenAI):
         run_manager: Optional[CallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> Iterator[ChatGenerationChunk]:
+        from langchain_core.messages import AIMessageChunk
+
+        # Store the original __add__ method
+        original_add = AIMessageChunk.__add__
+
+        # Helper function to check if a tool call is valid
+        def is_valid_tool_call(tc):
+            # Filter out invalid/incomplete tool calls
+            if not tc:
+                return False
+
+            # Check that we have an ID
+            if not tc.get("id"):
+                return False
+
+            # Check that we have a name
+            if tc.get("name") is None and tc.get("type") == "function":
+                return False
+
+            # Check for valid args
+            args = tc.get("args")
+            if args is None or args == "}" or args == "{}}":
+                return False
+
+            return True
+
+        # Create a patched version that ensures tool_calls are preserved
+        def patched_add(self, other):
+            result = original_add(self, other)
+
+            # Ensure tool_calls are preserved across additions
+            if hasattr(self, "tool_calls") and self.tool_calls:
+                if not hasattr(result, "tool_calls") or not result.tool_calls:
+                    result.tool_calls = [
+                        tc for tc in self.tool_calls if is_valid_tool_call(tc)
+                    ]
+
+            if hasattr(other, "tool_calls") and other.tool_calls:
+                if not hasattr(result, "tool_calls"):
+                    result.tool_calls = [
+                        tc for tc in other.tool_calls if is_valid_tool_call(tc)
+                    ]
+                else:
+                    # Merge unique tool calls, filtering out invalid ones
+                    existing_ids = {tc.get("id", "") for tc in result.tool_calls}
+                    for tc in other.tool_calls:
+                        if tc.get("id", "") not in existing_ids and is_valid_tool_call(
+                            tc
+                        ):
+                            result.tool_calls.append(tc)
+
+            return result
+
+        # Monkey patch the __add__ method
+        AIMessageChunk.__add__ = patched_add
+
         try:
-            yield from super()._stream(
+            # Original streaming
+            for chunk in super()._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
-            )
-        except JSONDecodeError as e:
-            raise JSONDecodeError(
-                "Qwen QwQ Thingking API returned an invalid response. "
-                "Please check the API status and try again.",
-                e.doc,
-                e.pos,
-            ) from e
+            ):
+                yield chunk
+        finally:
+            # Restore the original method
+            AIMessageChunk.__add__ = original_add
 
     def _generate(
         self,
@@ -349,3 +375,156 @@ class ChatQwQ(BaseChatOpenAI):
                 e.doc,
                 e.pos,
             ) from e
+
+    async def _agenerate(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        try:
+            chunks = [
+                chunk
+                async for chunk in self._astream(
+                    messages, stop=stop, run_manager=run_manager, **kwargs
+                )
+            ]
+            content = ""
+            reasoning_content = ""
+            tool_calls = []
+            current_tool_calls = {}  # Track tool calls being built
+
+            for chunk in chunks:
+                if isinstance(chunk.message.content, str):
+                    content += chunk.message.content
+                reasoning_content += chunk.message.additional_kwargs.get(
+                    "reasoning_content", ""
+                )
+
+                if chunk_tool_calls := chunk.message.additional_kwargs.get(
+                    "tool_calls", []
+                ):
+                    for tool_call in chunk_tool_calls:
+                        index = tool_call.get("index", "")
+
+                        # Initialize tool call entry if needed
+                        if index not in current_tool_calls:
+                            current_tool_calls[index] = {
+                                "id": "",
+                                "name": "",
+                                "args": "",
+                                "type": "function",
+                            }
+
+                        # Update tool call ID
+                        if tool_id := tool_call.get("id"):
+                            current_tool_calls[index]["id"] = tool_id
+
+                        # Update function name and arguments
+                        if function := tool_call.get("function"):
+                            if name := function.get("name"):
+                                current_tool_calls[index]["name"] = name
+                            if args := function.get("arguments"):
+                                current_tool_calls[index]["args"] += args
+
+            # Convert accumulated tool calls to final format
+            tool_calls = list(current_tool_calls.values())
+            for tool_call in tool_calls:
+                tool_call["args"] = json.loads(tool_call["args"])
+
+            last_chunk = chunks[-1]
+
+            return ChatResult(
+                generations=[
+                    ChatGeneration(
+                        generation_info=last_chunk.generation_info,
+                        message=AIMessage(
+                            content=content,
+                            additional_kwargs={"reasoning_content": reasoning_content},
+                            tool_calls=tool_calls,
+                        ),
+                    )
+                ]
+            )
+
+        except JSONDecodeError as e:
+            raise JSONDecodeError(
+                "Qwen QwQ Thingking API returned an invalid response. "
+                "Please check the API status and try again.",
+                e.doc,
+                e.pos,
+            ) from e
+
+    async def _astream(
+        self,
+        messages: List[BaseMessage],
+        stop: Optional[List[str]] = None,
+        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        **kwargs: Any,
+    ) -> AsyncIterator[ChatGenerationChunk]:
+        from langchain_core.messages import AIMessageChunk
+
+        # Store the original __add__ method
+        original_add = AIMessageChunk.__add__
+
+        # Helper function to check if a tool call is valid
+        def is_valid_tool_call(tc):
+            # Filter out invalid/incomplete tool calls
+            if not tc:
+                return False
+
+            # Check that we have an ID
+            if not tc.get("id"):
+                return False
+
+            # Check that we have a name
+            if tc.get("name") is None and tc.get("type") == "function":
+                return False
+
+            # Check for valid args
+            args = tc.get("args")
+            if args is None or args == "}" or args == "{}}":
+                return False
+
+            return True
+
+        # Create a patched version that ensures tool_calls are preserved
+        def patched_add(self, other):
+            result = original_add(self, other)
+
+            # Ensure tool_calls are preserved across additions
+            if hasattr(self, "tool_calls") and self.tool_calls:
+                if not hasattr(result, "tool_calls") or not result.tool_calls:
+                    result.tool_calls = [
+                        tc for tc in self.tool_calls if is_valid_tool_call(tc)
+                    ]
+
+            if hasattr(other, "tool_calls") and other.tool_calls:
+                if not hasattr(result, "tool_calls"):
+                    result.tool_calls = [
+                        tc for tc in other.tool_calls if is_valid_tool_call(tc)
+                    ]
+                else:
+                    # Merge unique tool calls, filtering out invalid ones
+                    existing_ids = {tc.get("id", "") for tc in result.tool_calls}
+                    for tc in other.tool_calls:
+                        if tc.get("id", "") not in existing_ids and is_valid_tool_call(
+                            tc
+                        ):
+                            result.tool_calls.append(tc)
+
+            return result
+
+        # Monkey patch the __add__ method
+        AIMessageChunk.__add__ = patched_add
+
+        try:
+            # Original async streaming
+            async for chunk in super()._astream(
+                messages, stop=stop, run_manager=run_manager, **kwargs
+            ):
+                yield chunk
+        finally:
+            # Restore the original method
+            AIMessageChunk.__add__ = original_add

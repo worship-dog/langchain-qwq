@@ -2,11 +2,10 @@
 
 from typing import Type
 
+from dotenv import load_dotenv
 from langchain_tests.integration_tests import ChatModelIntegrationTests
 
 from langchain_qwq.chat_models import ChatQwQ
-
-from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -22,27 +21,27 @@ class TestChatQwQIntegration(ChatModelIntegrationTests):
         return {
             "model": "qwq-plus",
         }
-        
+
     @property
     def has_tool_choice(self) -> bool:
         return False
-    
+
     @property
     def has_structured_output(self) -> bool:
         return False
-    
+
     @property
     def supports_json_mode(self) -> bool:
         return False
-    
+
     @property
     def returns_usage_metadata(self) -> bool:
         return False
-    
+
     @property
     def supports_anthropic_inputs(self) -> bool:
         return False
-    
+
     @property
     def supports_image_tool_message(self) -> bool:
         return False

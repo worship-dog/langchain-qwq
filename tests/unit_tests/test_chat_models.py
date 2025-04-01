@@ -2,13 +2,13 @@
 
 from typing import Type
 
+from dotenv import load_dotenv
 from langchain_tests.unit_tests import ChatModelUnitTests
 
 from langchain_qwq.chat_models import ChatQwQ
 
-from dotenv import load_dotenv
-
 load_dotenv()
+
 
 class TestChatQwQUnit(ChatModelUnitTests):
     @property
