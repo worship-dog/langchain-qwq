@@ -92,14 +92,29 @@ class ChatQwQ(BaseChatOpenAI):
     Async:
         .. code-block:: python
 
-            await llm.ainvoke(messages)
+            # Basic async invocation
+            result = await llm.ainvoke(messages)
 
-            # stream:
-            # async for chunk in (await llm.astream(messages))
+            # Access content and reasoning
+            content = result.content
+            reasoning = result.additional_kwargs.get("reasoning_content", "")
 
-            # batch:
-            # await llm.abatch([messages])
+            # Stream response chunks
+            async for chunk in await llm.astream(messages):
+                print(chunk.content, end="")
+                # Access reasoning in each chunk
+                reasoning_chunk = chunk.additional_kwargs.get("reasoning_content", "")
 
+            # Process tool calls in completion
+            if hasattr(result, "tool_calls") and result.tool_calls:
+                for tool_call in result.tool_calls:
+                    tool_id = tool_call.get("id")
+                    tool_name = tool_call.get("name")
+                    tool_args = tool_call.get("args")
+                    # Process tool call...
+
+            # Batch processing of multiple message sets
+            results = await llm.abatch([messages1, messages2])
 
     """  # noqa: E501
 
@@ -180,9 +195,9 @@ class ChatQwQ(BaseChatOpenAI):
             if isinstance(model_extra, dict) and (
                 reasoning := model_extra.get("reasoning")
             ):
-                rtn.generations[0].message.additional_kwargs["reasoning_content"] = (
-                    reasoning
-                )
+                rtn.generations[0].message.additional_kwargs[
+                    "reasoning_content"
+                ] = reasoning
 
         return rtn
 
