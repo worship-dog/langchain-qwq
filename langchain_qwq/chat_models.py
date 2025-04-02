@@ -210,9 +210,9 @@ class ChatQwQ(BaseChatOpenAI):
             if isinstance(model_extra, dict) and (
                 reasoning := model_extra.get("reasoning")
             ):
-                rtn.generations[0].message.additional_kwargs["reasoning_content"] = (
-                    reasoning
-                )
+                rtn.generations[0].message.additional_kwargs[
+                    "reasoning_content"
+                ] = reasoning
 
         return rtn
 
@@ -321,6 +321,7 @@ class ChatQwQ(BaseChatOpenAI):
         AIMessageChunk.__add__ = patched_add  # type: ignore
 
         try:
+            kwargs["stream_options"] = {"include_usage": True}
             # Original streaming
             for chunk in super()._stream(
                 messages, stop=stop, run_manager=run_manager, **kwargs
@@ -386,17 +387,30 @@ class ChatQwQ(BaseChatOpenAI):
 
             last_chunk = chunks[-1]
 
+            # Extract usage info from the last chunk's generation_info
+            generation_info = last_chunk.generation_info or {}
+            # Extract usage metadata from chunk if available
+            usage_metadata = last_chunk.message.usage_metadata
+
             return ChatResult(
                 generations=[
                     ChatGeneration(
-                        generation_info=last_chunk.generation_info,
+                        generation_info=generation_info,  # This now contains usage metadata
                         message=AIMessage(
                             content=content,
                             additional_kwargs={"reasoning_content": reasoning_content},
                             tool_calls=tool_calls,
+                            usage_metadata=usage_metadata,
+                            response_metadata={"model_name": self.model_name},
                         ),
                     )
-                ]
+                ],
+                # Explicitly include usage at the ChatResult level if needed
+                llm_output=(
+                    {"usage": generation_info.get("usage")}
+                    if "usage" in generation_info
+                    else None
+                ),
             )
 
         except JSONDecodeError as e:
@@ -466,17 +480,30 @@ class ChatQwQ(BaseChatOpenAI):
 
             last_chunk = chunks[-1]
 
+            # Extract usage info from the last chunk's generation_info
+            generation_info = last_chunk.generation_info or {}
+            # Extract usage metadata from chunk if available
+            usage_metadata = last_chunk.message.usage_metadata
+
             return ChatResult(
                 generations=[
                     ChatGeneration(
-                        generation_info=last_chunk.generation_info,
+                        generation_info=generation_info,  # This now contains usage metadata
                         message=AIMessage(
                             content=content,
                             additional_kwargs={"reasoning_content": reasoning_content},
                             tool_calls=tool_calls,
+                            usage_metadata=usage_metadata,
+                            response_metadata={"model_name": self.model_name},
                         ),
                     )
-                ]
+                ],
+                # Explicitly include usage at the ChatResult level if needed
+                llm_output=(
+                    {"usage": generation_info.get("usage")}
+                    if "usage" in generation_info
+                    else None
+                ),
             )
 
         except JSONDecodeError as e:
@@ -552,6 +579,7 @@ class ChatQwQ(BaseChatOpenAI):
         AIMessageChunk.__add__ = patched_add  # type: ignore
 
         try:
+            kwargs["stream_options"] = {"include_usage": True}
             # Original async streaming
             async for chunk in super()._astream(
                 messages, stop=stop, run_manager=run_manager, **kwargs

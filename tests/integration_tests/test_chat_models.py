@@ -27,21 +27,5 @@ class TestChatQwQIntegration(ChatModelIntegrationTests):
         return False
 
     @property
-    def has_structured_output(self) -> bool:
-        return True
-
-    @property
-    def supports_json_mode(self) -> bool:
-        return True
-
-    @property
-    def returns_usage_metadata(self) -> bool:
-        return False
-
-    @property
-    def supports_anthropic_inputs(self) -> bool:
-        return True
-
-    @property
     def supports_image_tool_message(self) -> bool:
         return False
