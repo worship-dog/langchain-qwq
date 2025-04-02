@@ -210,9 +210,9 @@ class ChatQwQ(BaseChatOpenAI):
             if isinstance(model_extra, dict) and (
                 reasoning := model_extra.get("reasoning")
             ):
-                rtn.generations[0].message.additional_kwargs[
-                    "reasoning_content"
-                ] = reasoning
+                rtn.generations[0].message.additional_kwargs["reasoning_content"] = (
+                    reasoning
+                )
 
         return rtn
 
@@ -390,12 +390,15 @@ class ChatQwQ(BaseChatOpenAI):
             # Extract usage info from the last chunk's generation_info
             generation_info = last_chunk.generation_info or {}
             # Extract usage metadata from chunk if available
-            usage_metadata = last_chunk.message.usage_metadata
+            if hasattr(last_chunk.message, "usage_metadata"):
+                usage_metadata = last_chunk.message.usage_metadata
+            else:
+                usage_metadata = {}
 
             return ChatResult(
                 generations=[
                     ChatGeneration(
-                        generation_info=generation_info,  # This now contains usage metadata
+                        generation_info=generation_info,
                         message=AIMessage(
                             content=content,
                             additional_kwargs={"reasoning_content": reasoning_content},
@@ -483,12 +486,15 @@ class ChatQwQ(BaseChatOpenAI):
             # Extract usage info from the last chunk's generation_info
             generation_info = last_chunk.generation_info or {}
             # Extract usage metadata from chunk if available
-            usage_metadata = last_chunk.message.usage_metadata
+            if hasattr(last_chunk.message, "usage_metadata"):
+                usage_metadata = last_chunk.message.usage_metadata
+            else:
+                usage_metadata = {}
 
             return ChatResult(
                 generations=[
                     ChatGeneration(
-                        generation_info=generation_info,  # This now contains usage metadata
+                        generation_info=generation_info,
                         message=AIMessage(
                             content=content,
                             additional_kwargs={"reasoning_content": reasoning_content},
