@@ -1,16 +1,14 @@
 """Qwen QwQ Thingking chat models."""
 
 from json import JSONDecodeError
-from operator import itemgetter
 from typing import (
     Any,
     AsyncIterator,
-    Callable,
     Dict,
     Iterator,
     List,
+    Literal,
     Optional,
-    Sequence,
     Type,
     TypeVar,
     Union,
@@ -19,23 +17,14 @@ from typing import (
 import json_repair as json
 import openai
 from langchain_core.callbacks import (
+    AsyncCallbackManagerForLLMRun,
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models import LanguageModelInput
-from langchain_core.messages import (
-    AIMessage,
-    AIMessageChunk,
-    BaseMessage,
-)
-from langchain_core.output_parsers.openai_tools import (
-    JsonOutputKeyToolsParser,
-    PydanticToolsParser,
-)
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolCall
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.runnables import Runnable, RunnableMap, RunnablePassthrough
-from langchain_core.tools import BaseTool
+from langchain_core.runnables import Runnable
 from langchain_core.utils import from_env, secret_from_env
-from langchain_core.utils.function_calling import convert_to_openai_tool
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from langchain_openai.chat_models.base import BaseChatOpenAI
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, model_validator
@@ -221,9 +210,9 @@ class ChatQwQ(BaseChatOpenAI):
             if isinstance(model_extra, dict) and (
                 reasoning := model_extra.get("reasoning")
             ):
-                rtn.generations[0].message.additional_kwargs[
-                    "reasoning_content"
-                ] = reasoning
+                rtn.generations[0].message.additional_kwargs["reasoning_content"] = (
+                    reasoning
+                )
 
         return rtn
 
@@ -255,7 +244,7 @@ class ChatQwQ(BaseChatOpenAI):
                             generation_chunk.message.tool_calls.append(
                                 {
                                     "id": tool_call.get("id", ""),
-                                    "type": "function",
+                                    "type": "function",  # type: ignore
                                     "name": tool_call.get("function", {}).get(
                                         "name", ""
                                     ),
@@ -280,7 +269,7 @@ class ChatQwQ(BaseChatOpenAI):
         original_add = AIMessageChunk.__add__
 
         # Helper function to check if a tool call is valid
-        def is_valid_tool_call(tc):
+        def is_valid_tool_call(tc: ToolCall) -> bool:
             # Filter out invalid/incomplete tool calls
             if not tc:
                 return False
@@ -301,8 +290,9 @@ class ChatQwQ(BaseChatOpenAI):
             return True
 
         # Create a patched version that ensures tool_calls are preserved
-        def patched_add(self, other):
-            result = original_add(self, other)
+        def patched_add(self: AIMessageChunk, other: AIMessageChunk) -> AIMessageChunk:
+            if not isinstance(result := original_add(self, other), AIMessageChunk):
+                raise ValueError("Result is not an AIMessageChunk")
 
             # Ensure tool_calls are preserved across additions
             if hasattr(self, "tool_calls") and self.tool_calls:
@@ -328,7 +318,7 @@ class ChatQwQ(BaseChatOpenAI):
             return result
 
         # Monkey patch the __add__ method
-        AIMessageChunk.__add__ = patched_add
+        AIMessageChunk.__add__ = patched_add  # type: ignore
 
         try:
             # Original streaming
@@ -338,7 +328,7 @@ class ChatQwQ(BaseChatOpenAI):
                 yield chunk
         finally:
             # Restore the original method
-            AIMessageChunk.__add__ = original_add
+            AIMessageChunk.__add__ = original_add  # type: ignore
 
     def _generate(
         self,
@@ -421,7 +411,7 @@ class ChatQwQ(BaseChatOpenAI):
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> ChatResult:
         try:
@@ -501,7 +491,7 @@ class ChatQwQ(BaseChatOpenAI):
         self,
         messages: List[BaseMessage],
         stop: Optional[List[str]] = None,
-        run_manager: Optional[CallbackManagerForLLMRun] = None,
+        run_manager: Optional[AsyncCallbackManagerForLLMRun] = None,
         **kwargs: Any,
     ) -> AsyncIterator[ChatGenerationChunk]:
         from langchain_core.messages import AIMessageChunk
@@ -510,7 +500,7 @@ class ChatQwQ(BaseChatOpenAI):
         original_add = AIMessageChunk.__add__
 
         # Helper function to check if a tool call is valid
-        def is_valid_tool_call(tc):
+        def is_valid_tool_call(tc: ToolCall) -> bool:
             # Filter out invalid/incomplete tool calls
             if not tc:
                 return False
@@ -531,8 +521,9 @@ class ChatQwQ(BaseChatOpenAI):
             return True
 
         # Create a patched version that ensures tool_calls are preserved
-        def patched_add(self, other):
-            result = original_add(self, other)
+        def patched_add(self: AIMessageChunk, other: AIMessageChunk) -> AIMessageChunk:
+            if not isinstance(result := original_add(self, other), AIMessageChunk):
+                raise ValueError("Result is not an AIMessageChunk")
 
             # Ensure tool_calls are preserved across additions
             if hasattr(self, "tool_calls") and self.tool_calls:
@@ -558,7 +549,7 @@ class ChatQwQ(BaseChatOpenAI):
             return result
 
         # Monkey patch the __add__ method
-        AIMessageChunk.__add__ = patched_add
+        AIMessageChunk.__add__ = patched_add  # type: ignore
 
         try:
             # Original async streaming
@@ -568,86 +559,91 @@ class ChatQwQ(BaseChatOpenAI):
                 yield chunk
         finally:
             # Restore the original method
-            AIMessageChunk.__add__ = original_add
+            AIMessageChunk.__add__ = original_add  # type: ignore
 
     def with_structured_output(
         self,
-        schema: Union[Dict, Type[BaseModel]],
+        schema: Optional[_DictOrPydanticClass] = None,
         *,
+        method: Literal[
+            "function_calling", "json_mode", "json_schema"
+        ] = "function_calling",
         include_raw: bool = False,
-        method: str = "function_calling",
         strict: Optional[bool] = None,
         **kwargs: Any,
-    ) -> Runnable[LanguageModelInput, Union[Dict, BaseModel]]:
-        """Create a version of this chat model that returns outputs formatted according to the given schema.
+    ) -> Runnable[LanguageModelInput, _DictOrPydantic]:
+        (
+            """Create a version of this chat model that returns outputs formatted """
+            """according to the given schema.
 
         Args:
-            schema: The schema to use for formatting the output. Can be a dictionary or a Pydantic model.
+            schema: The schema to use for formatting the output. Can be a dictionary"""
+            """or a Pydantic model.
             include_raw: Whether to include the raw model output in the output.
-            method: The method to use for formatting the output. Should be "function_calling" for OpenAI compatibility.
-            strict: Whether to enforce strict validation of the output against the schema. If not provided, will default to True.
+            method: The method to use for formatting the output.
+            strict: Whether to enforce strict validation of the output against """
+            """the schema. If not provided, will default to True.
             **kwargs: Additional keyword arguments to pass to the model.
 
         Returns:
             A runnable that returns outputs formatted according to the given schema.
         """
+        )
         import json
         import re
-        from copy import deepcopy
-        from operator import itemgetter
-        from langchain_core.runnables import (
-            RunnableLambda,
-            RunnableMap,
-            RunnablePassthrough,
-        )
-        from langchain_core.output_parsers import BaseOutputParser
-        from langchain_core.messages import SystemMessage, HumanMessage
-        from langchain_core.utils.function_calling import convert_to_openai_tool
 
-        # Set default for strict
+        from langchain_core.messages import HumanMessage, SystemMessage
+        from langchain_core.output_parsers import BaseOutputParser
+        from langchain_core.runnables import RunnableLambda
+        from langchain_core.utils.function_calling import convert_to_json_schema
+
         if strict is None:
             strict = True
 
-        # Extract schema information
-        is_pydantic_schema = is_basemodel_subclass(schema)
-
-        # Create the schema dict, name, and output class using convert_to_json_schema
-        from langchain_core.utils.function_calling import convert_to_json_schema
-
-        try:
-            schema_dict = convert_to_json_schema(schema)
-            if is_pydantic_schema:
-                schema_name = schema.__name__
-                output_cls = schema
-            elif isinstance(schema, dict):
-                schema_name = schema.get("title", "CustomOutput")
-                output_cls = None
-            else:
-                schema_name = getattr(schema, "__name__", "CustomOutput")
-                output_cls = None
-        except Exception as e:
-            # Fallback for cases where convert_to_json_schema fails
-            if is_pydantic_schema:
-                if hasattr(schema, "model_json_schema"):
-                    schema_dict = schema.model_json_schema()  # Pydantic v2
-                elif hasattr(schema, "schema"):
-                    schema_dict = schema.schema()  # Pydantic v1
+        if schema is None:
+            if method != "json_mode":
+                raise ValueError(
+                    "schema must be provided when method is not 'json_mode'"
+                )
+            schema_dict = {}
+            schema_name = "CustomOutput"
+            output_cls = None
+        else:
+            # Extract schema information using convert_to_json_schema
+            try:
+                schema_dict = convert_to_json_schema(schema)
+                if isinstance(schema, type) and is_basemodel_subclass(schema):
+                    schema_name = schema.__name__
+                    output_cls = schema
+                elif isinstance(schema, dict):
+                    schema_name = schema.get("title", "CustomOutput")
+                    output_cls = None
                 else:
-                    raise ValueError(f"Unsupported Pydantic model: {schema}")
-                schema_name = schema.__name__
-                output_cls = schema
-            elif isinstance(schema, dict):
-                schema_dict = schema
-                schema_name = schema_dict.get("title", "CustomOutput")
-                output_cls = None
-            else:
-                raise ValueError(f"Unsupported schema type: {type(schema)}: {str(e)}")
+                    schema_name = getattr(schema, "__name__", "CustomOutput")
+                    output_cls = None
+            except Exception:
+                # Fallback for cases where convert_to_json_schema fails
+                if isinstance(schema, type) and is_basemodel_subclass(schema):
+                    if hasattr(schema, "model_json_schema"):
+                        schema_dict = schema.model_json_schema()  # Pydantic v2
+                    elif hasattr(schema, "schema"):
+                        schema_dict = schema.schema()  # Pydantic v1
+                    else:
+                        raise ValueError(f"Unsupported Pydantic model: {schema}")
+                    schema_name = schema.__name__
+                    output_cls = schema
+                elif isinstance(schema, dict):
+                    schema_dict = schema
+                    schema_name = schema_dict.get("title", "CustomOutput")
+                    output_cls = None
+                else:
+                    raise ValueError(f"Unsupported schema type: {type(schema)}")
 
         # Create a custom output parser
-        class StructuredOutputParser(BaseOutputParser):
+        class StructuredOutputParser(BaseOutputParser[Any]):
             """Parser for structured output from QwQ."""
 
-            def parse(self, text):
+            def parse(self, text: str) -> Any:
                 """Parse the output and convert to the target format."""
                 try:
                     # Try to parse as JSON
@@ -677,7 +673,7 @@ class ChatQwQ(BaseChatOpenAI):
                         elif hasattr(output_cls, "parse_obj"):
                             return output_cls.parse_obj(parsed)
                         else:
-                            raise ValueError(f"Unsupported Pydantic validation method")
+                            raise ValueError("Unsupported Pydantic validation method")
                     return parsed
                 except Exception as e:
                     if strict:
@@ -685,7 +681,9 @@ class ChatQwQ(BaseChatOpenAI):
                     return text
 
         # Create system prompt for JSON output
-        system_template = """You are a helpful assistant that always responds with JSON that matches this schema:
+        system_template = (
+            """You are a helpful assistant that always responds with"""
+            """JSON that matches this schema:
     ```json
     {schema}
     ```
@@ -702,13 +700,14 @@ class ChatQwQ(BaseChatOpenAI):
     Example of a good response format:
     {{"key1": "value1", "key2": 42, "key3": false}}
     """
+        )
 
         # Format the schema for the prompt
         formatted_schema = json.dumps(schema_dict, indent=2)
         system_content = system_template.format(schema=formatted_schema)
 
         # Create a function to prepare messages with the system prompt
-        def prepare_messages(input_value):
+        def prepare_messages(input_value: Any) -> List[BaseMessage]:
             """Prepare messages with system prompt for structured output."""
             if isinstance(input_value, str):
                 return [
@@ -732,7 +731,7 @@ class ChatQwQ(BaseChatOpenAI):
                     return messages
                 else:
                     # Add system message at the beginning
-                    return [SystemMessage(content=system_content)] + input_value
+                    return [SystemMessage(content=system_content)] + input_value  # type: ignore
             else:
                 # Convert to string and use as human message
                 return [
@@ -741,7 +740,6 @@ class ChatQwQ(BaseChatOpenAI):
                 ]
 
         # Create a modified version of the model with structured output format
-        # This is the key part for callbacks - we use bind() to attach the metadata
         structured_model = self.bind(
             ls_structured_output_format={
                 "schema": schema_dict,
@@ -757,20 +755,27 @@ class ChatQwQ(BaseChatOpenAI):
         # Build the chain
         if include_raw:
             # Include raw output in the result
-            chain = (
-                RunnableMap(
-                    {"raw": lambda x: structured_model.invoke(prepare_messages(x))}
-                )
-                .assign(parsed=lambda x: output_parser.parse(x["raw"].content))
-                .with_fallbacks(
-                    [RunnableMap({"raw": itemgetter("raw"), "parsed": lambda x: None})],
-                    exception_key="parsing_error",
-                )
-            )
+            def process_with_raw(x: Any) -> Dict[str, Any]:
+                raw_output = structured_model.invoke(prepare_messages(x))
+                try:
+                    if isinstance(raw_output.content, str):
+                        parsed = output_parser.parse(raw_output.content)
+                    else:
+                        parsed = raw_output.content
+                    return {"raw": raw_output, "parsed": parsed, "parsing_error": None}
+                except Exception as e:
+                    return {"raw": raw_output, "parsed": None, "parsing_error": e}
+
+            chain = RunnableLambda(process_with_raw)
         else:
             # Only return parsed output
-            chain = RunnableLambda(
-                lambda x: structured_model.invoke(prepare_messages(x))
-            ) | RunnableLambda(lambda x: output_parser.parse(x.content))
+            def process_without_raw(x: Any) -> Any:
+                raw_output = structured_model.invoke(prepare_messages(x))
+                if isinstance(raw_output.content, str):
+                    return output_parser.parse(raw_output.content)
+                else:
+                    return raw_output.content
+
+            chain = RunnableLambda(process_without_raw)
 
         return chain
