@@ -40,7 +40,7 @@ class TestChatQwQIntegration(ChatModelIntegrationTests):
 
     @property
     def supports_anthropic_inputs(self) -> bool:
-        return False
+        return True
 
     @property
     def supports_image_tool_message(self) -> bool:
