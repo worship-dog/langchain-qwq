@@ -1,6 +1,6 @@
 from importlib import metadata
 
-from langchain_qwq.chat_models import ChatQwQ
+from langchain_qwq_modification.chat_models import ChatQwQ
 
 try:
     __version__ = metadata.version(__package__)

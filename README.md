@@ -1,7 +1,18 @@
-# langchain-qwq魔改，提高兼容性
+# langchain-qwq-modification
+魔改langchain-qwq，提高兼容性：
 1. 为api_base设置别名base_url；
 2. 合并reasoning_content到content；
 3. 添加<think>与</think>标签
+
+## Installation
+
+```bash
+pip install -U langchain-qwq-modification
+```
+
+---
+
+以下为原版langchain-qwq的readme
 
 ---
 
@@ -25,7 +36,7 @@ And you should configure credentials by setting the following environment variab
 `ChatQwQ` class exposes chat models from QwQ. The integration works directly with a standard API key without requiring the Tongyi dependency.
 
 ```python
-from langchain_qwq import ChatQwQ
+from langchain_qwq_modification import ChatQwQ
 
 llm = ChatQwQ()
 llm.invoke("Sing a ballad of LangChain.")

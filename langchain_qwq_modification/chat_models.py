@@ -236,7 +236,7 @@ class ChatQwQ(BaseChatOpenAI):
         if (choices := chunk.get("choices")) and generation_chunk:
             top = choices[0]
             if isinstance(generation_chunk.message, AIMessageChunk):
-                # 新增：首次赋值时添加前缀<think>
+                # 首次赋值时添加前缀<think>
                 if not think_state["prefix_added"]:
                     if delta := top.get("delta", {}):
                         if "reasoning_content" in delta and delta["reasoning_content"]:
@@ -250,10 +250,11 @@ class ChatQwQ(BaseChatOpenAI):
                             "reasoning_content"
                         ] = reasoning_content
                         generation_chunk.message.content += reasoning_content
-                        # 处理首次遇到reasoning_content为空时加后缀</think>
-                    elif think_state["suffix_needed"] and think_state["prefix_added"]:
-                        generation_chunk.message.content += "</think>"
-                        think_state["suffix_needed"] = False
+                    # 处理首次遇到reasoning_content为空且content不为空时加后缀</think>
+                    elif content := delta.get("content"):
+                        if think_state["suffix_needed"] and think_state["prefix_added"]:
+                            generation_chunk.message.content += "</think>"
+                            think_state["suffix_needed"] = False
 
                     # Handle tool calls
                     if tool_calls := delta.get("tool_calls"):
@@ -349,6 +350,12 @@ class ChatQwQ(BaseChatOpenAI):
         finally:
             # Restore the original method
             AIMessageChunk.__add__ = original_add  # type: ignore
+            # 重置状态
+            global think_state
+            think_state = {
+                "prefix_added": False,
+                "suffix_needed": False,
+            }
 
     def _generate(
         self,
@@ -613,6 +620,12 @@ class ChatQwQ(BaseChatOpenAI):
         finally:
             # Restore the original method
             AIMessageChunk.__add__ = original_add  # type: ignore
+            # 重置状态
+            global think_state
+            think_state = {
+                "prefix_added": False,
+                "suffix_needed": False,
+            }
 
     def with_structured_output(
         self,

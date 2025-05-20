@@ -5,7 +5,7 @@ from typing import Type
 from dotenv import load_dotenv
 from langchain_tests.integration_tests import ChatModelIntegrationTests
 
-from langchain_qwq.chat_models import ChatQwQ
+from langchain_qwq_modification.chat_models import ChatQwQ
 
 load_dotenv()
 
