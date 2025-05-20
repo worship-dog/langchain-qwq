@@ -1,3 +1,10 @@
+# langchain-qwq魔改，提高兼容性
+1. 为api_base设置别名base_url；
+2. 合并reasoning_content到content；
+3. 添加<think>与</think>标签
+
+---
+
 # langchain-qwq
 
 This package contains the LangChain integration with QwQ
