@@ -1,4 +1,4 @@
-"""Qwen QwQ Thingking chat models."""
+"""Integration for Qwen QwQ and Qwen3  with thinking chat models."""
 
 from json import JSONDecodeError
 from typing import (
@@ -9,6 +9,7 @@ from typing import (
     List,
     Literal,
     Optional,
+    Tuple,
     Type,
     TypeVar,
     Union,
@@ -21,9 +22,9 @@ from langchain_core.callbacks import (
     CallbackManagerForLLMRun,
 )
 from langchain_core.language_models import LanguageModelInput
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolCall
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, BaseMessageChunk, ToolCall
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
-from langchain_core.runnables import Runnable
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_core.utils import from_env, secret_from_env
 from langchain_core.utils.pydantic import is_basemodel_subclass
 from langchain_openai.chat_models.base import BaseChatOpenAI
@@ -36,7 +37,59 @@ _BM = TypeVar("_BM", bound=BaseModel)
 _DictOrPydanticClass = Union[Dict[str, Any], Type[_BM], Type]
 _DictOrPydantic = Union[Dict, _BM]
 
-think_state = {"prefix_added": False, "suffix_needed": False}
+
+def convert_reasoning_to_content(
+        chunks: Union[Iterator[BaseMessageChunk], AsyncIterator[BaseMessageChunk]],
+        think_tag: Tuple[str, str] = ("<think>", "</think>"),
+) -> Union[Iterator[BaseMessageChunk], AsyncIterator[BaseMessageChunk]]:
+    """
+    核心处理函数：将消息流中的推理内容用标签包裹
+    支持同步和异步迭代器
+    """
+    state = {'is_first': True, 'is_end': True}
+
+    def process_chunk(chunk: BaseMessageChunk) -> BaseMessageChunk:
+        if isinstance(chunk, AIMessageChunk) and "reasoning_content" in chunk.additional_kwargs:
+            if state['is_first']:
+                chunk.content = f"{think_tag[0]}{chunk.additional_kwargs['reasoning_content']}"
+                state['is_first'] = False
+            else:
+                chunk.content = chunk.additional_kwargs["reasoning_content"]
+        elif (
+                isinstance(chunk, AIMessageChunk)
+                and "reasoning_content" not in chunk.additional_kwargs
+                and chunk.content
+                and state['is_end']
+        ):
+            chunk.content = f"{think_tag[1]}{chunk.content}"
+            state['is_end'] = False
+        return chunk
+
+    if isinstance(chunks, AsyncIterator):
+        async def async_wrapper():
+            async for chunk in chunks:
+                yield process_chunk(chunk)
+
+        return async_wrapper()
+    else:
+        def sync_wrapper():
+            for chunk in chunks:
+                yield process_chunk(chunk)
+
+        return sync_wrapper()
+
+
+def convert_reasoning_to_content_decorator(
+        think_tag: Tuple[str, str] = ("<think>", "</think>")
+):
+    def decorator(func):
+        def wrapper(*args, **kwargs):
+            chunks = func(*args, **kwargs)
+            return convert_reasoning_to_content(chunks, think_tag)
+
+        return wrapper
+
+    return decorator
 
 
 class ChatQwQ(BaseChatOpenAI):
@@ -140,12 +193,12 @@ class ChatQwQ(BaseChatOpenAI):
     api_key: Optional[SecretStr] = Field(
         default_factory=secret_from_env("DASHSCOPE_API_KEY", default=None)
     )
-    """DeepSeek API key"""
+    """Qwen QwQ Thinking API key"""
     api_base: str = Field(
         default_factory=from_env("DASHSCOPE_API_BASE", default=DEFAULT_API_BASE),
-        alias = "base_url"
+        alias="base_url",
     )
-    """DeepSeek API base URL"""
+    """Qwen QwQ Thinking API base URL"""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -223,10 +276,8 @@ class ChatQwQ(BaseChatOpenAI):
         self,
         chunk: dict,
         default_chunk_class: Type,
-        base_generation_info: Optional[Dict]
+        base_generation_info: Optional[Dict],
     ) -> Optional[ChatGenerationChunk]:
-        global think_state
-
         generation_chunk = super()._convert_chunk_to_generation_chunk(
             chunk,
             default_chunk_class,
@@ -236,25 +287,11 @@ class ChatQwQ(BaseChatOpenAI):
         if (choices := chunk.get("choices")) and generation_chunk:
             top = choices[0]
             if isinstance(generation_chunk.message, AIMessageChunk):
-                # 首次赋值时添加前缀<think>
-                if not think_state["prefix_added"]:
-                    if delta := top.get("delta", {}):
-                        if "reasoning_content" in delta and delta["reasoning_content"]:
-                            generation_chunk.message.content = "<think>"
-                            think_state["prefix_added"] = True
-                            think_state["suffix_needed"] = True
-                # 原有逻辑
                 if delta := top.get("delta", {}):
                     if reasoning_content := delta.get("reasoning_content"):
                         generation_chunk.message.additional_kwargs[
                             "reasoning_content"
                         ] = reasoning_content
-                        generation_chunk.message.content += reasoning_content
-                    # 处理首次遇到reasoning_content为空且content不为空时加后缀</think>
-                    elif content := delta.get("content"):
-                        if think_state["suffix_needed"] and think_state["prefix_added"]:
-                            generation_chunk.message.content += "</think>"
-                            think_state["suffix_needed"] = False
 
                     # Handle tool calls
                     if tool_calls := delta.get("tool_calls"):
@@ -274,7 +311,6 @@ class ChatQwQ(BaseChatOpenAI):
                             )
 
         return generation_chunk
-
 
     def _stream(
         self,
@@ -350,12 +386,6 @@ class ChatQwQ(BaseChatOpenAI):
         finally:
             # Restore the original method
             AIMessageChunk.__add__ = original_add  # type: ignore
-            # 重置状态
-            global think_state
-            think_state = {
-                "prefix_added": False,
-                "suffix_needed": False,
-            }
 
     def _generate(
         self,
@@ -417,7 +447,7 @@ class ChatQwQ(BaseChatOpenAI):
             generation_info = last_chunk.generation_info or {}
             # Extract usage metadata from chunk if available
             if hasattr(last_chunk.message, "usage_metadata"):
-                usage_metadata = last_chunk.message.usage_metadata
+                usage_metadata = last_chunk.message.usage_metadata  # type: ignore
             else:
                 usage_metadata = {}
 
@@ -513,7 +543,7 @@ class ChatQwQ(BaseChatOpenAI):
             generation_info = last_chunk.generation_info or {}
             # Extract usage metadata from chunk if available
             if hasattr(last_chunk.message, "usage_metadata"):
-                usage_metadata = last_chunk.message.usage_metadata
+                usage_metadata = last_chunk.message.usage_metadata  # type: ignore
             else:
                 usage_metadata = {}
 
@@ -620,12 +650,6 @@ class ChatQwQ(BaseChatOpenAI):
         finally:
             # Restore the original method
             AIMessageChunk.__add__ = original_add  # type: ignore
-            # 重置状态
-            global think_state
-            think_state = {
-                "prefix_added": False,
-                "suffix_needed": False,
-            }
 
     def with_structured_output(
         self,
@@ -685,7 +709,7 @@ class ChatQwQ(BaseChatOpenAI):
                     schema_name = schema.get("title", "CustomOutput")
                     output_cls = None
                 else:
-                    schema_name = schema.__name__
+                    schema_name = getattr(schema, "__name__", "CustomOutput")
                     output_cls = None
             except Exception:
                 # Fallback for cases where convert_to_json_schema fails
@@ -845,3 +869,152 @@ class ChatQwQ(BaseChatOpenAI):
             chain = RunnableLambda(process_without_raw)
 
         return chain
+
+
+class ChatQwen(ChatQwQ):
+    """Qwen Qwen3 Thinking chat model integration to access models hosted in Qwen Qwen3's API.
+
+    Setup:
+        Install ``langchain-qwq`` and set environment variable ``DASHSCOPE_API_KEY``.
+
+        .. code-block:: bash
+
+            pip install -U langchain-qwq
+            export DASHSCOPE_API_KEY="your-api-key"
+
+    Key init args — completion params:
+        model: str
+            Name of Qwen Qwen3 model to use, e.g. "qwen3-32b".
+        temperature: float
+            Sampling temperature.
+        max_tokens: Optional[int]
+            Max number of tokens to generate.
+
+    Key init args — client params:
+        timeout: Optional[float]
+            Timeout for requests.
+        max_retries: int
+            Max number of retries.
+        api_key: Optional[str]
+            Qwen QwQ Thingking API key. If not passed in will be read from env var DASHSCOPE_API_KEY.
+
+    See full list of supported init args and their descriptions in the params section.
+
+    Instantiate:
+        .. code-block:: python
+
+            from langchain_qwq import ChatQwen
+
+            llm = ChatQwen(
+                model="...",
+                temperature=0,
+                max_tokens=None,
+                timeout=None,
+                max_retries=2,
+                # api_key="...",
+                # other params...
+            )
+
+    Invoke:
+        .. code-block:: python
+
+            messages = [
+                ("system", "You are a helpful translator. Translate the user sentence to French."),
+                ("human", "I love programming."),
+            ]
+            llm.invoke(messages)
+
+    Stream:
+        .. code-block:: python
+
+            for chunk in llm.stream(messages):
+                print(chunk.text(), end="")
+
+        .. code-block:: python
+
+            stream = llm.stream(messages)
+            full = next(stream)
+            for chunk in stream:
+                full += chunk
+            full
+
+    Async:
+        .. code-block:: python
+
+            # Basic async invocation
+            result = await llm.ainvoke(messages)
+
+            # Access content and reasoning
+            content = result.content
+            reasoning = result.additional_kwargs.get("reasoning_content", "")
+
+            # Stream response chunks
+            async for chunk in await llm.astream(messages):
+                print(chunk.content, end="")
+                # Access reasoning in each chunk
+                reasoning_chunk = chunk.additional_kwargs.get("reasoning_content", "")
+
+            # Process tool calls in completion
+            if hasattr(result, "tool_calls") and result.tool_calls:
+                for tool_call in result.tool_calls:
+                    tool_id = tool_call.get("id")
+                    tool_name = tool_call.get("name")
+                    tool_args = tool_call.get("args")
+                    # Process tool call...
+
+            # Batch processing of multiple message sets
+            results = await llm.abatch([messages1, messages2])
+
+    """  # noqa: E501
+
+    model_name: str = Field(default="qwen3-32b", alias="model")
+    """The name of the model"""
+
+    enable_thinking: Optional[bool] = Field(default=None)
+    """Whether to enable thinking"""
+
+    thinking_budget: Optional[int] = Field(default=None)
+    """Thinking budget"""
+
+    @property
+    def _llm_type(self) -> str:
+        """Return type of chat model."""
+        return "chat-qwen"
+
+    @property
+    def _default_params(self) -> Dict[str, Any]:
+        """Get the default parameters for calling ChatQwen API."""
+        params = super()._default_params
+        if self.enable_thinking is not None:
+            if "extra_body" not in params:
+                params["extra_body"] = {}
+            params["extra_body"]["enable_thinking"] = self.enable_thinking
+        if self.thinking_budget is not None:
+            if "extra_body" not in params:
+                params["extra_body"] = {}
+            params["extra_body"]["thinking_budget"] = self.thinking_budget
+
+        return params
+
+    @convert_reasoning_to_content_decorator()
+    def stream(
+            self,
+            input: LanguageModelInput,
+            config: Optional[RunnableConfig] = None,
+            *,
+            stop: Optional[list[str]] = None,
+            **kwargs: Any,
+    ) -> Iterator[BaseMessageChunk]:
+        return super().stream(input, config, stop=stop, **kwargs)
+
+    @convert_reasoning_to_content_decorator()
+    async def astream(
+            self,
+            input: LanguageModelInput,
+            config: Optional[RunnableConfig] = None,
+            *,
+            stop: Optional[list[str]] = None,
+            **kwargs: Any,
+    ) -> AsyncIterator[BaseMessageChunk]:
+        async for chunk in super().astream(input, config, stop=stop, **kwargs):
+            yield chunk

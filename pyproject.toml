@@ -4,12 +4,26 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry]
 name = "langchain-qwq-modification"
-version = "0.0.2"
+version = "0.0.3"
 description = "An integration package connecting QwQ and LangChain"
-authors = ["Yiğit Bekir Kaya, PhD <yigit353@gmail.com>", "Worship Dog, <worship76@foxmail.com>"]
+authors = ["Yiğit Bekir Kaya, PhD <yigit353@gmail.com>", "tbice TBice123123", "Worship Dog, <worship76@foxmail.com>"]
 readme = "README.md"
 repository = "https://github.com/worship-dog/langchain-qwq"
 license = "MIT"
+
+[tool.poetry.extras]
+docs = ["notebook"]
+test = [
+  "pytest",
+  "pytest-asyncio",
+  "pytest-socket",
+  "pytest-watcher",
+  "langchain-tests",
+  "python-dotenv"
+]
+codespell = ["codespell"]
+lint = ["ruff"]
+typing = ["mypy"]
 
 [tool.mypy]
 disallow_untyped_defs = "True"
@@ -25,6 +39,12 @@ openai = "^1.70.0"
 langchain-openai = "^0.3.11"
 python-dotenv = "^1.1.0"
 json-repair = "^0.40.0"
+
+[tool.poetry.group.docs]
+optional = true
+
+[tool.poetry.group.docs.dependencies]
+notebook = "^7.4.2"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "T201"]
